@@ -6,6 +6,16 @@ Goal is to implement & optimize **Lanczos-3 image resampling**, starting with a 
 
 The emphasis is on understanding interpolation, numerical behavior, memory layout, profiling, and performance optimization—not on using a prebuilt resize implementation.
 
+## Visual Comparison
+
+### Original Image (736 × 535)
+
+![Original Image](sample-images/0.jpg)
+
+### Lanczos-3 Super-Sampled (1472 × 1070)
+
+![Lanczos Super-Sampled](sample-images/resized.png)
+
 ## Current status
 
 **Working baseline: naive, direct 2D Lanczos-3 resampler (CPU).**
