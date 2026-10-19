@@ -6,8 +6,8 @@
 #include <iostream>
 
 inline float sinc(float x) {
-  // x==0
-  if (std::abs(x) < 1e-9)
+  // sinc(1) ~ -2*10^-8
+  if (std::abs(x) < epsilon)
     return 1.0;
   return std::sin(PI * x) / (PI * x);
 }
@@ -41,6 +41,8 @@ uint8_t *lanczos_resize(uint8_t *img, int x, int y) {
       float x_src = ((rx + 0.5) * scale) - 0.5;
       float y_src = ((ry + 0.5) * scale) - 0.5;
       // valid neighbours [x_min....x_max],[y_min....y_max]
+      // if floor/ceil(x)==x => x_min and x_max wt = 0 which is correct since
+      // they need to be ignored...dist < |window_sz|
       int x_min = std::max(0, (int)ceil(x_src) - window_sz);
       int x_max = std::min((int)floor(x_src) + window_sz, x - 1);
       int y_min = std::max((int)ceil(y_src) - window_sz, 0);
@@ -58,8 +60,8 @@ uint8_t *lanczos_resize(uint8_t *img, int x, int y) {
         }
       }
       // normalize and clamp 0-255
-      int norm =
-          (std::abs(tot_wt) < 1e-9) ? (int)dest_val : (int)(dest_val / tot_wt);
+      int norm = (std::abs(tot_wt) < epsilon) ? (int)dest_val
+                                              : (int)(dest_val / tot_wt);
       res[px] = (uint8_t)std::clamp(norm, 0, 255);
     }
   }

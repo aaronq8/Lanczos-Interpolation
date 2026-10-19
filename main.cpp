@@ -15,7 +15,7 @@ int main(int argc, char **argv) {
   int x, y, org_c;
   constexpr int8_t c_num = 3;
   // [RGB][RGB][RGB]....
-  stbi_uc *img = stbi_load("./sample-images/1.png", &y, &x, &org_c, 3);
+  stbi_uc *img = stbi_load("./sample-images/0.jpg", &y, &x, &org_c, 3);
   // for now we only support 8-bit values
   assert(sizeof(img[0]) == 1);
   std::cout << "Loaded image....x : " << x << ", y : " << y
@@ -39,19 +39,19 @@ int main(int argc, char **argv) {
   uint8_t *res_b = lanczos_resize(b_plane, x, y);
 
   int res_x = x * scale_rec, res_y = y * scale_rec;
-  stbi_uc *res = (stbi_uc *)std::malloc(res_x * res_y * 3);
+  stbi_uc *res = (stbi_uc *)std::malloc(res_x * res_y * c_num);
   for (int i = 0; i < res_x; i++) {
     for (int j = 0; j < res_y; j++) {
       int px = i * res_y + j;
       //[RGB][RGB]....
-      res[3 * px] = res_r[px];
-      res[3 * px + 1] = res_g[px];
-      res[3 * px + 2] = res_b[px];
+      res[c_num * px] = res_r[px];
+      res[c_num * px + 1] = res_g[px];
+      res[c_num * px + 2] = res_b[px];
     }
   }
   std::cout << "writing png...\n";
-  if (stbi_write_png("sample-images/resized.png", res_y, res_x, 3,
-                     (const void *)res, 3 * res_y)) {
+  if (stbi_write_png("sample-images/resized.png", res_y, res_x, c_num,
+                     (const void *)res, c_num * res_y)) {
     std::cout << "generated resized.png.....\n";
   } else {
     std::cerr << "FAILED to generate resized.png...\n";
