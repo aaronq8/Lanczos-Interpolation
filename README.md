@@ -45,45 +45,88 @@ $ ./build/release/lanczos
 
 **Scaling configuration:** The current source implementation has used a **2× resize in each dimension** (`scale = 0.5`, `scale_rec = 2`).
 
-## Resampling math
+## Resampling Mathematics
 
-Destination pixels map back to source coordinates via pixel-center alignment:
+### 1. Destination-to-source coordinate mapping
 
-\[
-x_s = (x_d + 0.5)\frac{W_s}{W_d} - 0.5
-\]
+For each destination pixel `(x_d, y_d)`, calculate the corresponding
+floating-point source coordinates using pixel-center alignment.
 
-(and equivalently for the vertical axis).
+$$
+x_s = (x_d + 0.5) \frac{W_s}{W_d} - 0.5
+$$
 
-The normalized sinc function is
+$$
+y_s = (y_d + 0.5) \frac{H_s}{H_d} - 0.5
+$$
 
-\[
-\operatorname{sinc}(t) =
+Where:
+- `W_s`, `H_s`: Source image width and height.
+- `W_d`, `H_d`: Destination image width and height.
+
+### 2. Lanczos-3 kernel
+
+The normalized sinc function is:
+
+$$
+\operatorname{sinc}(x) =
 \begin{cases}
-1 & t=0\\
-\frac{\sin(\pi t)}{\pi t} & t\ne0
+1, & x = 0 \\
+\frac{\sin(\pi x)}{\pi x}, & x \neq 0
 \end{cases}
-\]
+$$
 
-The Lanczos-3 kernel is
+The Lanczos-3 interpolation kernel is:
 
-\[
-L_3(t) =
+$$
+L_3(x) =
 \begin{cases}
-\operatorname{sinc}(t)\operatorname{sinc}(t/3) & |t| < 3\\
-0 & |t| \ge 3
+\operatorname{sinc}(x)\operatorname{sinc}(x/3), & |x| < 3 \\
+0, & |x| \geq 3
 \end{cases}
-\]
+$$
 
-For a single color plane, a destination sample is computed from neighboring source samples:
+### 3. Two-dimensional Lanczos interpolation
 
-\[
+For a source pixel `(i, j)`, the combined interpolation weight is:
+
+$$
+w(i,j) = L_3(x_s-i) \cdot L_3(y_s-j)
+$$
+
+The destination pixel value is calculated using a normalized weighted sum:
+
+$$
 D(x_d,y_d) =
-\frac{\sum_{i,j} S(i,j)L_3(x_s-i)L_3(y_s-j)}
-{\sum_{i,j} L_3(x_s-i)L_3(y_s-j)}.
-\]
+\frac{
+\sum_{i,j} S(i,j) \cdot w(i,j)
+}{
+\sum_{i,j} w(i,j)
+}
+$$
 
-Only in-bounds source pixels within the radius are included. Current implementation uses floating-point accumulators and converts the final clamped value back to 8 bits.
+Only source pixels satisfying both conditions contribute:
+
+$$
+|x_s-i| < 3
+$$
+
+$$
+|y_s-j| < 3
+$$
+
+For interior destination pixels, Lanczos-3 typically considers
+6 source samples along each axis, resulting in 36 neighboring pixels.
+
+### 4. Output conversion
+
+The resulting floating-point value is rounded and clamped to
+the valid 8-bit range:
+
+$$
+D_{\text{8-bit}} = \operatorname{clamp}
+\left(\operatorname{round}(D), 0, 255\right)
+$$
 
 ## Building
 
