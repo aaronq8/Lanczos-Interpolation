@@ -69,7 +69,7 @@ Where:
 The normalized sinc function is:
 
 $$
-\operatorname{sinc}(x) =
+\mathrm{sinc}(x) =
 \begin{cases}
 1, & x = 0 \\
 \frac{\sin(\pi x)}{\pi x}, & x \neq 0
@@ -81,7 +81,7 @@ The Lanczos-3 interpolation kernel is:
 $$
 L_3(x) =
 \begin{cases}
-\operatorname{sinc}(x)\operatorname{sinc}(x/3), & |x| < 3 \\
+\mathrm{sinc}(x)\mathrm{sinc}(x/3), & |x| < 3 \\
 0, & |x| \geq 3
 \end{cases}
 $$
@@ -124,8 +124,8 @@ The resulting floating-point value is rounded and clamped to
 the valid 8-bit range:
 
 $$
-D_{\text{8-bit}} = \operatorname{clamp}
-\left(\operatorname{round}(D), 0, 255\right)
+D_{\text{8-bit}} = \mathrm{clamp}
+\left(\mathrm{round}(D), 0, 255\right)
 $$
 
 ## Building
