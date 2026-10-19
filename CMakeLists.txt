@@ -8,9 +8,19 @@ add_executable(lanczos main.cpp
     )
 
 target_include_directories(lanczos PRIVATE ${PROJECT_SOURCE_DIR}/external-libs ${PROJECT_SOURCE_DIR}/include)
+
+# disable logs on release build
+target_compile_definitions(lanczos PRIVATE
+    $<$<CONFIG:Release>:DISABLE_DEBUG_LOGS>
+)
+
 option(ENABLE_ASAN "Enable AddressSanitizer" ON)
 
 if(ENABLE_ASAN)
-    target_compile_options(lanczos PRIVATE -fsanitize=address -fno-omit-frame-pointer)
-    target_link_options(lanczos PRIVATE -fsanitize=address)
+# always disable ASAN on release builds
+    target_compile_options(lanczos PRIVATE
+        $<$<CONFIG:Debug>:-fsanitize=address>
+        $<$<CONFIG:Debug>:-fno-omit-frame-pointer>)
+    target_link_options(lanczos PRIVATE
+        $<$<CONFIG:Debug>:-fsanitize=address>)
 endif()

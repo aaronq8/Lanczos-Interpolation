@@ -1,4 +1,5 @@
 #include "lanczos.h"
+#include "logger.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -30,7 +31,7 @@ eg scale = 0.5 and 4 pixels in src
 0 -> -0.25, 7->3.25 ..... |-0.25| == |0.25|
 */
 uint8_t *lanczos_resize(uint8_t *img, int x, int y) {
-  std::cout << "resizing....\n";
+  LOG_DEBUG("resizing....");
   uint8_t *res = (uint8_t *)std::malloc(x * y * scale_rec * scale_rec);
   int res_x = scale_rec * x;
   int res_y = scale_rec * y;
@@ -47,8 +48,7 @@ uint8_t *lanczos_resize(uint8_t *img, int x, int y) {
       int x_max = std::min((int)floor(x_src) + window_sz, x - 1);
       int y_min = std::max((int)ceil(y_src) - window_sz, 0);
       int y_max = std::min((int)floor(y_src) + window_sz, y - 1);
-      //   std::cout << "(" << x_min << " : " << x_max << "),(" << y_min << ":"
-      //             << y_max << ")\n";
+
       float tot_wt = 0.0;
       float dest_val = 0.0;
       for (int i = x_min; i <= x_max; i++) {
@@ -65,6 +65,6 @@ uint8_t *lanczos_resize(uint8_t *img, int x, int y) {
       res[px] = (uint8_t)std::clamp(norm, 0, 255);
     }
   }
-  std::cout << "completed resize....\n";
+  LOG_DEBUG("completed resize....");
   return res;
 }
