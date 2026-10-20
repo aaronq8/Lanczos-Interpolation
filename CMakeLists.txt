@@ -15,6 +15,7 @@ target_include_directories(lanczos PUBLIC ${PROJECT_SOURCE_DIR}/external-libs ${
 # disable logs on release build
 target_compile_definitions(lanczos PUBLIC
     $<$<CONFIG:Release>:DISABLE_DEBUG_LOGS>
+    $<$<CONFIG:RelWithDebInfo>:DISABLE_DEBUG_LOGS>
 )
 
 option(ENABLE_ASAN "Enable AddressSanitizer" ON)
