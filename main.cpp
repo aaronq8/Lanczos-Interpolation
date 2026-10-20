@@ -1,9 +1,10 @@
+#include <sys/types.h>
+
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <ratio>
-#include <sys/types.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -59,7 +60,7 @@ int main(int argc, char **argv) {
     }
   }
   LOG_INFO("writing png...\n");
-  if (stbi_write_png("sample-images/resized.png", res_y, res_x, c_num,
+  if (stbi_write_png("sample-images/resized-sep.png", res_y, res_x, c_num,
                      (const void *)res, c_num * res_y)) {
     LOG_INFO("generated resized.png.....");
   } else {

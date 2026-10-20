@@ -14,7 +14,7 @@ The emphasis is on understanding interpolation, numerical behavior, memory layou
 
 ### Lanczos-3 Super-Sampled (1472 × 1070)
 
-![Lanczos Super-Sampled](sample-images/resized.png)
+![Lanczos Super-Sampled](sample-images/resized-sep.png)
 
 ## Current status
 
