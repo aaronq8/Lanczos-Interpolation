@@ -1,6 +1,7 @@
 #include "lanczos.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -9,7 +10,8 @@
 
 inline float sinc(float x) {
   // sinc(1) ~ -2*10^-8
-  if (std::abs(x) < epsilon) return 1.0;
+  if (std::abs(x) < epsilon)
+    return 1.0;
   return std::sin(PI * x) / (PI * x);
 }
 
@@ -44,23 +46,32 @@ uint8_t *lanczos_resize(uint8_t *img, int x, int y) {
    */
   float *buf = (float *)std::malloc(res_y * x * sizeof(float));
   // horizontal pass
+  // we go column major so that y_src is fixed
   auto start_hz = std::chrono::steady_clock::now();
-  for (int rx = 0; rx < x; rx++) {
-    for (int ry = 0; ry < res_y; ry++) {
-      int px = rx * res_y + ry;
-      float y_src = ((ry + 0.5) * scale) - 0.5;
-      // valid neighbours [rx][y_min....y_max]
-      int y_min = std::max((int)ceil(y_src) - window_sz, 0);
-      int y_max = std::min((int)floor(y_src) + window_sz, y - 1);
+  for (int ry = 0; ry < res_y; ry++) {
+    float y_src = ((ry + 0.5) * scale) - 0.5;
+    // valid neighbours [rx][y_min....y_max]
+    int y_min = std::max((int)ceil(y_src) - window_sz, 0);
+    int y_max = std::min((int)floor(y_src) + window_sz, y - 1);
 
-      float tot_wt = 0.0;
+    // precalculate L3 values
+    // y_min.....y_src.....y_max
+    // 38 ms -> ~3 ms
+    float l_precalc[2 * window_sz + 1];
+    float tot_wt = 0.0;
+    for (int i = y_min; i <= y_max; i++) {
+      l_precalc[i - y_min] = L3(y_src - i);
+      tot_wt += l_precalc[i - y_min];
+    }
+
+    for (int rx = 0; rx < x; rx++) {
+      int px = rx * res_y + ry;
       float buf_val = 0.0;
       for (int j = y_min; j <= y_max; j++) {
         // calculate weight for neighbour rx,j
         // L(0)=1 so we can ignore row/x weight
-        float wt = L3(y_src - j);
+        float wt = l_precalc[j - y_min];
         buf_val += (wt * (float)img[rx * y + j]);
-        tot_wt += wt;
       }
       // normalize but store as float since we want to minimize precision loss
       // before 2nd pass
