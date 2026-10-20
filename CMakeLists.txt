@@ -6,16 +6,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_executable(lanczos main.cpp
-    external-libs/stb_image.h
-    src/lanczos.cpp
-    external-libs/stb_image_write.h
-    )
+find_package(benchmark REQUIRED)
 
-target_include_directories(lanczos PRIVATE ${PROJECT_SOURCE_DIR}/external-libs ${PROJECT_SOURCE_DIR}/include)
+add_library(lanczos src/lanczos.cpp)
+
+target_include_directories(lanczos PUBLIC ${PROJECT_SOURCE_DIR}/external-libs ${PROJECT_SOURCE_DIR}/include)
 
 # disable logs on release build
-target_compile_definitions(lanczos PRIVATE
+target_compile_definitions(lanczos PUBLIC
     $<$<CONFIG:Release>:DISABLE_DEBUG_LOGS>
 )
 
@@ -23,9 +21,16 @@ option(ENABLE_ASAN "Enable AddressSanitizer" ON)
 
 if(ENABLE_ASAN)
 # always disable ASAN on release builds
-    target_compile_options(lanczos PRIVATE
+    target_compile_options(lanczos PUBLIC
         $<$<CONFIG:Debug>:-fsanitize=address>
         $<$<CONFIG:Debug>:-fno-omit-frame-pointer>)
-    target_link_options(lanczos PRIVATE
+    target_link_options(lanczos PUBLIC
         $<$<CONFIG:Debug>:-fsanitize=address>)
 endif()
+
+# generate executables
+add_executable(lanczos-main main.cpp)
+target_link_libraries(lanczos-main PRIVATE lanczos)
+
+add_executable(lanczos-bench benchmarks/bench_lanczos.cpp)
+target_link_libraries(lanczos-bench PRIVATE lanczos benchmark::benchmark_main)

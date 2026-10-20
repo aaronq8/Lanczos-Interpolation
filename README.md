@@ -33,21 +33,23 @@ The emphasis is on understanding interpolation, numerical behavior, memory layou
 
 **Implementation convention:** `x = rows (height)` and `y = columns (width)`. The code uses `img[row * width + col]` for row-major plane indexing.
 
-## Performance Log
+### Optimized Scalar Baseline — Intel i9-13980HX
 
-The benchmark measures the Lanczos resizing stage for **all three RGB planes**, excluding JPEG decoding and PNG writing. Measurements below are from individual reported Release runs, not statistical medians. Compare speedups **within the same machine**, not across different machines.
-
-**Common test configuration**
-
-| Setting | Value |
+| Parameter | Value |
 |---|---|
-| Input | `sample-images/0.jpg` |
-| Input resolution | 736 × 535 (width × height) |
-| Output resolution | 1472 × 1070 (2× along each axis) |
-| Input/output format | RGB8 (three planar channels during resampling) |
-| Kernel | Lanczos-3, support radius 3 |
-| Build | CMake Release; no ASan for benchmarking |
-| Measured work | Resize all three RGB planes |
+| Input resolution | 736 × 535 |
+| Output resolution | 1472 × 1070 |
+| Color format | RGB8, planar |
+| Algorithm | Separable Lanczos-3 |
+| Optimization | Precomputed weights per destination coordinate |
+| SIMD | None (explicit SIMD intrinsics) |
+| Multithreading | None |
+| Benchmark | Google Benchmark |
+| Repetitions | 10 |
+| Median latency | **21.655 ms** |
+| Standard deviation | 0.111 ms |
+| Coefficient of variation | 0.51% |
+
 
 ### Benchmark Results
 
