@@ -36,11 +36,13 @@ int main(int argc, char **argv) {
       b_plane[px] = img[c_num * px + 2];
     }
   }
+  // need to call init with same image dimensions for L3 coefficients pre-calc
+  auto [precalc_l_y, precalc_l_x] = lanczos_init(x, y);
 
   auto start = std::chrono::steady_clock::now();
-  uint8_t *res_r = lanczos_resize(r_plane, x, y);
-  uint8_t *res_g = lanczos_resize(g_plane, x, y);
-  uint8_t *res_b = lanczos_resize(b_plane, x, y);
+  uint8_t *res_r = lanczos_resize(r_plane, x, y, precalc_l_y, precalc_l_x);
+  uint8_t *res_g = lanczos_resize(g_plane, x, y, precalc_l_y, precalc_l_x);
+  uint8_t *res_b = lanczos_resize(b_plane, x, y, precalc_l_y, precalc_l_x);
   auto end = std::chrono::steady_clock::now();
 
   double elapsed_ms =
@@ -71,6 +73,8 @@ int main(int argc, char **argv) {
   std::free(res_r);
   std::free(res_g);
   std::free(res_b);
+  std::free(precalc_l_y);
+  std::free(precalc_l_x);
   std::free(r_plane);
   std::free(g_plane);
   std::free(b_plane);
