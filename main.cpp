@@ -38,7 +38,11 @@ int main(int argc, char **argv) {
   }
   // need to call init with same image dimensions for L3 coefficients pre-calc
   auto [precalc_l_y, precalc_l_x] = lanczos_init(x, y);
-
+  // we do a warm-up call because 1st kernel execution ~5ms where as rest
+  // ~2-~3ms
+  // why with warmup, our kernel much faster ?? 20ms -> 15ms ?
+  // maybe we should try ARENA ?
+  uint8_t *warmup = lanczos_resize(r_plane, x, y, precalc_l_y, precalc_l_x);
   auto start = std::chrono::steady_clock::now();
   uint8_t *res_r = lanczos_resize(r_plane, x, y, precalc_l_y, precalc_l_x);
   uint8_t *res_g = lanczos_resize(g_plane, x, y, precalc_l_y, precalc_l_x);
@@ -69,6 +73,7 @@ int main(int argc, char **argv) {
     LOG_INFO("FAILED to generate resized.png...");
   }
   // free everything
+  std::free(warmup);
   std::free(res);
   std::free(res_r);
   std::free(res_g);

@@ -10,6 +10,7 @@ static void BM_lanczosSinglePlane(benchmark::State &state) {
   for (int i = 0; i < x * y; i++)
     channel[i] = (uint8_t)(i % 256);
   auto [precalc_l_y, precalc_l_x] = lanczos_init(x, y);
+  uint8_t *warmup = lanczos_resize(channel, x, y, precalc_l_y, precalc_l_x);
 
   for (auto _ : state) {
     uint8_t *channel_out =
@@ -17,6 +18,7 @@ static void BM_lanczosSinglePlane(benchmark::State &state) {
     benchmark::DoNotOptimize(channel_out);
     std::free(channel_out);
   }
+  std::free(warmup);
   std::free(channel);
   std::free(precalc_l_y);
   std::free(precalc_l_x);
@@ -35,6 +37,7 @@ static void BM_lanczosRGB(benchmark::State &state) {
   }
 
   auto [precalc_l_y, precalc_l_x] = lanczos_init(x, y);
+  uint8_t *warmup = lanczos_resize(channel_r, x, y, precalc_l_y, precalc_l_x);
 
   for (auto _ : state) {
     uint8_t *r_out = lanczos_resize(channel_r, x, y, precalc_l_y, precalc_l_x);
@@ -49,6 +52,7 @@ static void BM_lanczosRGB(benchmark::State &state) {
     std::free(g_out);
     std::free(b_out);
   }
+  std::free(warmup);
   std::free(channel_r);
   std::free(channel_g);
   std::free(channel_b);
