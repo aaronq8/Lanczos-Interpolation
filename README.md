@@ -1,8 +1,8 @@
 # Lanczos Image Resampling
 
-README is AI Generated, Code is handwritten
+README is AI Generated, Code is handwritten.
 
-Goal is to implement & optimize **Lanczos-3 image resampling**, starting with a straightforward scalar CPU implementation and progressing toward CPU SIMD and CUDA versions.
+Goal: implement and optimize **Lanczos-3 image resampling**, beginning with a straightforward scalar CPU implementation and progressing toward CPU SIMD and CUDA versions.
 
 The emphasis is on understanding interpolation, numerical behavior, memory layout, profiling, and performance optimization—not on using a prebuilt resize implementation.
 
@@ -12,27 +12,56 @@ The emphasis is on understanding interpolation, numerical behavior, memory layou
 
 ![Original Image](sample-images/0.jpg)
 
-### Lanczos-3 Super-Sampled (1472 × 1070)
+### Lanczos-3 Resized (1472 × 1070)
 
-![Lanczos Super-Sampled](sample-images/resized-sep.png)
+![Lanczos-3 Resized](sample-images/resized-sep.png)
 
-## Current status
+## Current Status
 
-**Working baseline: naive, direct 2D Lanczos-3 resampler (CPU).**
+**Implemented: naive direct 2D Lanczos-3 and a faster, linearly separable scalar Lanczos-3 resampler.**
 
-- Loads JPEG images using `stb_image` (requests 8-bit, three-channel RGB output).
+- Loads JPEG images using `stb_image`, requesting 8-bit, three-channel RGB output.
 - Splits interleaved RGB into three planar 8-bit channels.
-- Resizes each channel independently with a scalar Lanczos-3 kernel.
-- Uses pixel-center coordinate mapping and a 2D product of horizontal and vertical Lanczos weights.
-- Normalizes the accumulated weighted sum and clamps output values to `[0, 255]`.
-- Interleaves the resized RGB planes and writes a PNG using `stb_image_write`.
-- Produces a visually correct resized image in the current test.
+- Resizes each color plane independently using Lanczos-3.
+- Uses pixel-center destination-to-source coordinate mapping.
+- Implements both a direct 2D kernel (baseline) and a two-pass, horizontal-then-vertical separable kernel.
+- Uses a floating-point scratch buffer for intermediate horizontal results, avoiding intermediate 8-bit clamping and quantization.
+- Normalizes filter weights at each stage, including near image borders.
+- Converts final values to 8-bit RGB, interleaves the planes, and writes PNG output with `stb_image_write`.
+- Produces visually correct resized output for the current test image.
 
-**Implementation notes:** The baseline directly evaluates the 2D kernel for every destination pixel; Image dimensions in the implementation use `x = rows (height)` and `y = columns (width)`.
+**Implementation convention:** `x = rows (height)` and `y = columns (width)`. The code uses `img[row * width + col]` for row-major plane indexing.
 
-## Performance log
+## Performance Log
 
-Measured on an **i9-13980HX 5.6 ghz 2MB L1 32 MB L2** machine, using the **Release** executable:
+The benchmark measures the Lanczos resizing stage for **all three RGB planes**, excluding JPEG decoding and PNG writing. Measurements below are from individual reported Release runs, not statistical medians. Compare speedups **within the same machine**, not across different machines.
+
+**Common test configuration**
+
+| Setting | Value |
+|---|---|
+| Input | `sample-images/0.jpg` |
+| Input resolution | 736 × 535 (width × height) |
+| Output resolution | 1472 × 1070 (2× along each axis) |
+| Input/output format | RGB8 (three planar channels during resampling) |
+| Kernel | Lanczos-3, support radius 3 |
+| Build | CMake Release; no ASan for benchmarking |
+| Measured work | Resize all three RGB planes |
+
+### Benchmark Results
+
+| Platform | Implementation | Kernel time | Speedup vs platform baseline |
+|---|---|---:|---:|
+| Intel Core i9-13980HX (ROG Strix G634JZ, Ubuntu) | Naive scalar, direct 2D | **1,896.13 ms** | **1.00×** |
+| Apple M1 Pro (macOS, Apple Clang) | Naive scalar, direct 2D | **~1,100 ms** | **1.00×** |
+| Apple M1 Pro (macOS, Apple Clang) | Separable scalar, horizontal + vertical | **~250 ms** | **~4.40×** |
+| Intel Core i9-13980HX (ROG Strix G634JZ, Ubuntu) | Separable scalar | Not yet measured | — |
+
+On the M1 Pro, separable filtering reduced runtime by approximately **77.3%** relative to its own direct-2D baseline.
+
+The ~1,100 ms and ~250 ms M1 Pro results are approximate figures. Compiler versions, CPU scheduling, clock behavior, and system math-library implementations can influence cross-platform timings; no cross-platform performance conclusions are drawn from these runs alone.
+
+**Original Intel baseline log**
 
 ```text
 $ ./build/release/lanczos
@@ -42,127 +71,146 @@ $ ./build/release/lanczos
 [INFO] writing png...
 ```
 
-| Metric | Baseline |
-|---|---:|
-| Input image | `sample-images/0.jpg` |
-| Input resolution | 736 × 535 (width × height) |
-| Input channels | RGB8 (3) |
-| Lanczos window radius | 3 |
-| Implementation | Scalar CPU, direct 2D, three planar channels |
-| Build | Release (`./build/release/lanczos`) |
-| Measured kernel time | **1,896.13 ms (~1.90 s)** |
+### Linearly Separable Lanczos-3
 
+**Observation:** A direct 2D Lanczos-3 filter combines horizontal and vertical weights for each neighboring source pixel, performing up to 36 weighted source-sample contributions per interior destination pixel. Its kernel is separable, allowing the same mathematical filtering operation to be computed using two one-dimensional passes.
 
-**Scaling configuration:** The current source implementation has used a **2× resize in each dimension** (`scale = 0.5`, `scale_rec = 2`).
+**Change:**
+
+1. **Horizontal pass:** for each of the `x` source rows, resize `y` columns to `res_y` columns, writing normalized floating-point results to a scratch buffer of shape `x × res_y`.
+2. **Vertical pass:** for each output column, use neighboring scratch-buffer rows to produce the final `res_x × res_y` image. Normalize, then convert to 8-bit values and clamp to `[0, 255]`.
+
+```text
+Source RGB plane            x × y          (uint8_t)
+       |
+       | Horizontal Lanczos-3
+       v
+Scratch buffer              x × res_y      (float)
+       |
+       | Vertical Lanczos-3
+       v
+Resized RGB plane           res_x × res_y  (uint8_t)
+```
+
+**Why this is faster:** For a 2× upscale, the direct filter performs about `36 × (2x) × (2y) = 144xy` sample contributions per channel. The separable version performs about `6 × x × (2y) + 6 × (2x) × (2y) = 36xy` contributions per channel (ignoring boundaries). It also dramatically reduces repeated Lanczos/sine evaluations. The scratch buffer adds memory traffic, but avoids much of the redundant arithmetic.
+
+**Result:** M1 Pro runtime went from **~1,100 ms to ~250 ms** (**~4.4× faster**).
 
 ## Resampling Mathematics
 
 ### 1. Destination-to-source coordinate mapping
 
-For each destination pixel `(x_d, y_d)`, calculate the corresponding
-floating-point source coordinates using pixel-center alignment.
+Map destination pixel centers back into source coordinates:
 
 $$
-x_s = (x_d + 0.5) \frac{W_s}{W_d} - 0.5
+x_s = (x_d + 0.5)\frac{W_s}{W_d} - 0.5
 $$
 
 $$
-y_s = (y_d + 0.5) \frac{H_s}{H_d} - 0.5
+y_s = (y_d + 0.5)\frac{H_s}{H_d} - 0.5
 $$
 
-Where:
-- `W_s`, `H_s`: Source image width and height.
-- `W_d`, `H_d`: Destination image width and height.
+Here `W` is width and `H` is height; in the implementation's variable convention, columns are `y` and rows are `x`.
 
 ### 2. Lanczos-3 kernel
 
 The normalized sinc function is:
 
 $$
-\mathrm{sinc}(x) =
+\mathrm{sinc}(t) =
 \begin{cases}
-1, & x = 0 \\
-\frac{\sin(\pi x)}{\pi x}, & x \neq 0
+1, & t = 0 \\
+\frac{\sin(\pi t)}{\pi t}, & t \neq 0
 \end{cases}
 $$
 
 The Lanczos-3 interpolation kernel is:
 
 $$
-L_3(x) =
+L_3(t) =
 \begin{cases}
-\mathrm{sinc}(x)\mathrm{sinc}(x/3), & |x| < 3 \\
-0, & |x| \geq 3
+\mathrm{sinc}(t)\mathrm{sinc}(t/3), & |t| < 3 \\
+0, & |t| \geq 3
 \end{cases}
 $$
 
-### 3. Two-dimensional Lanczos interpolation
+### 3. Direct two-dimensional Lanczos interpolation
 
-For a source pixel `(i, j)`, the combined interpolation weight is:
-
-$$
-w(i,j) = L_3(x_s-i) \cdot L_3(y_s-j)
-$$
-
-The destination pixel value is calculated using a normalized weighted sum:
+Using source **row** `i` and **column** `j`, the combined weight is:
 
 $$
-D(x_d,y_d) =
-\frac{
-\sum_{i,j} S(i,j) \cdot w(i,j)
-}{
-\sum_{i,j} w(i,j)
-}
+w(i,j) = L_3(r_s-i)L_3(c_s-j)
 $$
 
-Only source pixels satisfying both conditions contribute:
+where `r_s` and `c_s` are mapped source row and column coordinates. The output is:
 
 $$
-|x_s-i| < 3
+D(r_d,c_d) =
+\frac{\sum_{i,j} S(i,j)w(i,j)}{\sum_{i,j} w(i,j)}
 $$
 
-$$
-|y_s-j| < 3
-$$
+Only valid source pixels with $|r_s-i| < 3$ and $|c_s-j| < 3$ contribute. An interior destination pixel typically considers **6 × 6 = 36** source pixels.
 
-For interior destination pixels, Lanczos-3 typically considers
-6 source samples along each axis, resulting in 36 neighboring pixels.
+### 4. Separable horizontal and vertical interpolation
 
-### 4. Output conversion
+Because the combined weight is a product of independent one-dimensional weights, filtering can be done in two passes.
 
-The resulting floating-point value is rounded and clamped to
-the valid 8-bit range:
+First, horizontal filtering along columns:
 
 $$
-D_{\text{8-bit}} = \mathrm{clamp}
-\left(\mathrm{round}(D), 0, 255\right)
+T(i,c_d) =
+\frac{\sum_j S(i,j)L_3(c_s-j)}{\sum_j L_3(c_s-j)}
 $$
+
+Then, vertical filtering along rows:
+
+$$
+D(r_d,c_d) =
+\frac{\sum_i T(i,c_d)L_3(r_s-i)}{\sum_i L_3(r_s-i)}
+$$
+
+The normalization factors multiply to the direct 2D normalization factor because:
+
+$$
+\sum_{i,j} w_x(i)w_y(j)
+= \left(\sum_i w_x(i)\right)\left(\sum_j w_y(j)\right)
+$$
+
+Thus, with consistent boundary handling and without intermediate quantization, **the two-pass method is mathematically equivalent to direct 2D filtering**. Small floating-point differences are possible in practice.
+
+### 5. Output conversion
+
+The scratch buffer retains floating-point values without clamping. Only after the vertical pass is the final value converted to 8 bits:
+
+$$
+D_{\mathrm{8bit}} = \mathrm{clamp}(\mathrm{trunc}(D), 0, 255)
+$$
+
+The formula uses **truncation** to match the current C++ cast to `int`, not rounding to nearest.
 
 ## Building
 
 The project uses CMake and local `stb_image` / `stb_image_write` headers.
 
 ```bash
-# Debug build (ASan can be enabled with the project's ENABLE_ASAN option)
+# Debug build (with ASan if ENABLE_ASAN is active in Debug)
 cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build build/debug -j
 
-# Optimized Release build
+# Optimized Release build, ASan disabled
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release -DENABLE_ASAN=OFF
 cmake --build build/release -j
 
-# Run from the repository root (image path is currently relative)
+# Run from the repository root
 ./build/release/lanczos
 ```
 
-The current executable uses `sample-images/0.jpg` as input and writes `sample-images/resized.png`. Paths are currently hard-coded.
-
-> **Logging note:** The recorded Release run still printed `[INFO]` messages. If the intended policy is *no logs in Release*, check that the logger macros and `DISABLE_LOGS` compile definition are active, then rebuild.
+Image paths are currently hard-coded in the executable; update the stated output filename as the program evolves. Historical Release logs include `[INFO]` messages; verify logger configuration if builds are intended to suppress all logs.
 
 
 ## Scope
 
-- **Current:** RGB8 images; scalar CPU; Lanczos-3; 2× upscale test.
-- **Not yet implemented:** arbitrary scaling ratios, 16-bit channels, alpha-aware filtering, explicit antialiasing for downscaling, AVX2, CUDA.
+- **Current:** RGB8 images, scalar CPU, Lanczos-3, 2× upscale test, direct and separable implementations.
+- **Not yet implemented:** arbitrary scale ratios, 16-bit channels, alpha-aware filtering, downscaling antialiasing, SIMD, CUDA.
 
-This README is a snapshot of the current code; future measurements should be appended with their exact test settings rather than replacing the original result.
+New measurements should be **appended**, retaining earlier platform-specific baselines and documenting the exact test configuration.
