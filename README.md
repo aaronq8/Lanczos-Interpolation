@@ -18,13 +18,14 @@ The emphasis is on understanding interpolation, numerical behavior, memory layou
 
 ## Current Status
 
-**Implemented: naive direct 2D Lanczos-3 and a faster, linearly separable scalar Lanczos-3 resampler.**
+**Implemented: naive direct 2D Lanczos-3, separable scalar Lanczos-3, and per-coordinate precomputed Lanczos weights.**
 
 - Loads JPEG images using `stb_image`, requesting 8-bit, three-channel RGB output.
 - Splits interleaved RGB into three planar 8-bit channels.
 - Resizes each color plane independently using Lanczos-3.
 - Uses pixel-center destination-to-source coordinate mapping.
 - Implements both a direct 2D kernel (baseline) and a two-pass, horizontal-then-vertical separable kernel.
+- Precomputes Lanczos-3 coefficients for each destination column in the horizontal pass and destination row in the vertical pass, reusing them across the opposite axis.
 - Uses a floating-point scratch buffer for intermediate horizontal results, avoiding intermediate 8-bit clamping and quantization.
 - Normalizes filter weights at each stage, including near image borders.
 - Converts final values to 8-bit RGB, interleaves the planes, and writes PNG output with `stb_image_write`.
@@ -50,16 +51,27 @@ The benchmark measures the Lanczos resizing stage for **all three RGB planes**, 
 
 ### Benchmark Results
 
-| Platform | Implementation | Kernel time | Speedup vs platform baseline |
+| Platform | Implementation / change | Kernel time | Speedup vs same-platform baseline |
 |---|---|---:|---:|
-| Intel Core i9-13980HX (ROG Strix G634JZ, Ubuntu) | Naive scalar, direct 2D | **1,896.13 ms** | **1.00×** |
-| Apple M1 Pro (macOS, Apple Clang) | Naive scalar, direct 2D | **~1,100 ms** | **1.00×** |
-| Apple M1 Pro (macOS, Apple Clang) | Separable scalar, horizontal + vertical | **~250 ms** | **~4.40×** |
-| Intel Core i9-13980HX (ROG Strix G634JZ, Ubuntu) | Separable scalar | Not yet measured | — |
+| Intel Core i9-13980HX (Ubuntu) | Naive scalar, direct 2D | **1,896.13 ms** | 1.00× |
+| Intel Core i9-13980HX (Ubuntu) | Separable + precomputed weights in both passes | **22.90 ms** | **82.82×** |
+| Apple M1 Pro (macOS, Apple Clang) | Naive scalar, direct 2D | **~1,100 ms** | 1.00× |
+| Apple M1 Pro (macOS, Apple Clang) | Separable scalar (initial) | **~250 ms** | ~4.40× |
+| Apple M1 Pro (macOS, Apple Clang) | Separable + vertical-row traversal | **244.43 ms** | ~4.50× |
+| Apple M1 Pro (macOS, Apple Clang) | Separable + vertical weight precomputation | **98.10 ms** | ~11.21× |
 
-On the M1 Pro, separable filtering reduced runtime by approximately **77.3%** relative to its own direct-2D baseline.
+**Intel latest: ~98.8% less time** than the original naive 2D baseline. The **22.90 ms** figure is a single reported run, not a median. M1 Pro timings also come from individual runs, with the ~1,100 ms and ~250 ms values approximate. The **Intel and M1 Pro timings are separate experiments**; do not calculate optimization speedups across machines.
 
-The ~1,100 ms and ~250 ms M1 Pro results are approximate figures. Compiler versions, CPU scheduling, clock behavior, and system math-library implementations can influence cross-platform timings; no cross-platform performance conclusions are drawn from these runs alone.
+**Intel latest per-channel breakdown (ms)**
+
+| Channel | Horizontal | Vertical |
+|---|---:|---:|
+| R | 5.8977 | 5.4353 |
+| G | 2.2811 | 3.6287 |
+| B | 2.1836 | 3.2636 |
+| **Sum** | **10.3624** | **12.3276** |
+
+The reported total kernel time is **22.8961 ms** (including small overhead outside pass timers). The first channel took longer than subsequent channels; this is not yet explained, and the benchmark should be repeated under controlled conditions.
 
 **Original Intel baseline log**
 
@@ -71,14 +83,27 @@ $ ./build/release/lanczos
 [INFO] writing png...
 ```
 
-### Linearly Separable Lanczos-3
+**Latest Intel log (2026-10-20)**
 
-**Observation:** A direct 2D Lanczos-3 filter combines horizontal and vertical weights for each neighboring source pixel, performing up to 36 weighted source-sample contributions per interior destination pixel. Its kernel is separable, allowing the same mathematical filtering operation to be computed using two one-dimensional passes.
+```text
+[INFO] Loaded image....x : 535, y : 736, channels : 3
+[INFO] horizontal pass : 5.8977 ms
+[INFO] vertical pass : 5.43532 ms
+[INFO] horizontal pass : 2.28108 ms
+[INFO] vertical pass : 3.62871 ms
+[INFO] horizontal pass : 2.1836 ms
+[INFO] vertical pass : 3.26362 ms
+[INFO] Lanczos Kernel elapsed : 22.8961 ms
+```
+
+### Optimization 1: Linearly Separable Lanczos-3
+
+**Observation:** The direct 2D Lanczos-3 kernel combines horizontal and vertical weights, requiring up to 36 source-sample contributions per interior output pixel. It factors into two one-dimensional passes.
 
 **Change:**
 
-1. **Horizontal pass:** for each of the `x` source rows, resize `y` columns to `res_y` columns, writing normalized floating-point results to a scratch buffer of shape `x × res_y`.
-2. **Vertical pass:** for each output column, use neighboring scratch-buffer rows to produce the final `res_x × res_y` image. Normalize, then convert to 8-bit values and clamp to `[0, 255]`.
+1. **Horizontal pass:** resize each original row from `y` to `res_y` columns. Store the result in a floating-point scratch buffer (`x × res_y`).
+2. **Vertical pass:** resize the scratch buffer from `x` to `res_x` rows; normalize and convert to `uint8_t` only at the end.
 
 ```text
 Source RGB plane            x × y          (uint8_t)
@@ -92,9 +117,30 @@ Scratch buffer              x × res_y      (float)
 Resized RGB plane           res_x × res_y  (uint8_t)
 ```
 
-**Why this is faster:** For a 2× upscale, the direct filter performs about `36 × (2x) × (2y) = 144xy` sample contributions per channel. The separable version performs about `6 × x × (2y) + 6 × (2x) × (2y) = 36xy` contributions per channel (ignoring boundaries). It also dramatically reduces repeated Lanczos/sine evaluations. The scratch buffer adds memory traffic, but avoids much of the redundant arithmetic.
+For 2× upscaling, the direct filter needs approximately `144xy` source-sample contributions per channel, compared with `36xy` for two-pass filtering (ignoring edges). The scratch buffer adds memory traffic but avoids much of the redundant arithmetic.
 
-**Result:** M1 Pro runtime went from **~1,100 ms to ~250 ms** (**~4.4× faster**).
+**Observed on M1 Pro:** ~1,100 ms → ~250 ms (**~4.4× speedup**).
+
+### Optimization 2: Vertical loop order and coefficient reuse (Apple M1 Pro)
+
+**Observation:** With output columns as the outer loop, consecutive destination writes are separated by the destination row stride. Iterating destination rows outermost makes writes contiguous; for a fixed destination row, the vertical Lanczos weights are identical across all columns.
+
+**Changes and results:**
+
+- Reverse vertical loop order (`rx` outer, `ry` inner): **~250 ms → 244.43 ms** total (the ~250 ms initial value is approximate).
+- Compute the handful of vertical `L3()` weights and their normalization sum once per output row, then reuse across destination columns: **244.43 ms → 98.10 ms** total on the M1 Pro.
+
+This removes a large number of repeated trigonometric evaluations. Remaining sample accumulation still occurs for every output pixel.
+
+### Optimization 3: Horizontal coefficient reuse (Intel i9-13980HX)
+
+**Observation:** Horizontal weights depend on the destination column, not the source row. The initial horizontal pass recomputed them for every row and color plane.
+
+**Change:** Traverse destination columns outermost. For each output column, precompute its valid neighbor range, `L3()` coefficients, and sum of weights **once**, then reuse these coefficients for all source rows. The vertical pass also precomputes weights per destination row.
+
+**Result:** The latest Intel implementation measured **22.8961 ms** for all three RGB planes, compared with its **1,896.13 ms direct-2D baseline** (**~82.8× speedup overall**). This compares the combined optimizations, **not** the isolated benefit of horizontal coefficient precomputation; no directly comparable intermediate Intel benchmark was recorded.
+
+**Trade-off:** Column-major traversal in the horizontal pass reuses coefficients but causes strided input/scratch accesses across successive rows. A future experiment can precompute a compact coefficient table and restore row-major traversal to test memory locality separately.
 
 ## Resampling Mathematics
 
@@ -207,6 +253,19 @@ cmake --build build/release -j
 
 Image paths are currently hard-coded in the executable; update the stated output filename as the program evolves. Historical Release logs include `[INFO]` messages; verify logger configuration if builds are intended to suppress all logs.
 
+## Next Optimizations
+
+- [x] Naive direct 2D Lanczos-3 implementation
+- [x] Horizontal + vertical separable scalar filtering with float scratch buffer
+- [ ] Repeat each benchmark and report median / spread, keeping CPU and compiler settings documented
+- [ ] Quantitatively compare separable output against the original direct-2D reference (MAE, maximum absolute error, PSNR)
+- [x] Precompute and reuse horizontal/vertical weights across rows/columns
+- [ ] Evaluate shared coefficient tables across RGB planes
+- [x] Experiment with vertical row-major traversal
+- [ ] Evaluate horizontal row-major traversal with precomputed coefficient tables and scratch-buffer locality
+- [ ] Profile using Linux `perf` / platform-appropriate profiling tools
+- [ ] SIMD implementation (AVX2 on x86-64; ARM NEON as an optional Apple Silicon experiment)
+- [ ] CUDA implementation and CPU–GPU comparisons
 
 ## Scope
 
