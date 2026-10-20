@@ -44,6 +44,7 @@ uint8_t *lanczos_resize(uint8_t *img, int x, int y) {
    */
   float *buf = (float *)std::malloc(res_y * x * sizeof(float));
   // horizontal pass
+  auto start_hz = std::chrono::steady_clock::now();
   for (int rx = 0; rx < x; rx++) {
     for (int ry = 0; ry < res_y; ry++) {
       int px = rx * res_y + ry;
@@ -67,30 +68,56 @@ uint8_t *lanczos_resize(uint8_t *img, int x, int y) {
     }
   }
 
-  // vertical pass
-  for (int ry = 0; ry < res_y; ry++) {
-    for (int rx = 0; rx < res_x; rx++) {
-      int px = rx * res_y + ry;
-      float x_src = ((rx + 0.5) * scale) - 0.5;
-      // valid neighbours [x_min.....x_max][ry]
-      int x_min = std::max(0, (int)ceil(x_src) - window_sz);
-      int x_max = std::min((int)floor(x_src) + window_sz, x - 1);
+  auto end_hz = std::chrono::steady_clock::now();
 
-      float tot_wt = 0.0;
+  double elapsed_ms_hz =
+      std::chrono::duration<double, std::milli>(end_hz - start_hz).count();
+
+  LOG_INFO("horizontal pass : " << elapsed_ms_hz << " ms");
+
+  auto start_vert = std::chrono::steady_clock::now();
+
+  // vertical pass
+  // row-wise so that res access is cache aligned => ~4% faster
+  // buf access still needs to be improved
+  for (int rx = 0; rx < res_x; rx++) {
+    float x_src = ((rx + 0.5) * scale) - 0.5;
+    // valid neighbours [x_min.....x_max][ry]
+    int x_min = std::max(0, (int)ceil(x_src) - window_sz);
+    int x_max = std::min((int)floor(x_src) + window_sz, x - 1);
+
+    // precalculate L3 values
+    // x_min.....x_src.....x_max
+    // ~50ms -> ~5ms => 900% faster
+    float l_precalc[2 * window_sz + 1];
+    float tot_wt = 0.0;
+    for (int i = x_min; i <= x_max; i++) {
+      l_precalc[i - x_min] = L3(x_src - i);
+      tot_wt += l_precalc[i - x_min];
+    }
+
+    for (int ry = 0; ry < res_y; ry++) {
+      int px = rx * res_y + ry;
       float final_pixel = 0.0;
       for (int i = x_min; i <= x_max; i++) {
         // wt for i,ry
-        float wt = L3(x_src - i);
+        // weight(x_src - x_min)
+        float wt = l_precalc[i - x_min];
         // use scratch buffer [X * Scale*y]
         // TODO : this is bad for Cache-line..need to see how to improve
         final_pixel += (wt * (float)buf[i * res_y + ry]);
-        tot_wt += wt;
       }
       int norm = (std::abs(tot_wt) < epsilon) ? (int)final_pixel
                                               : (int)(final_pixel / tot_wt);
       res[px] = (uint8_t)std::clamp(norm, 0, 255);
     }
   }
+  auto end_vert = std::chrono::steady_clock::now();
+
+  double elapsed_ms_v =
+      std::chrono::duration<double, std::milli>(end_vert - start_vert).count();
+
+  LOG_INFO("vertical pass : " << elapsed_ms_v << " ms");
 
   std::free(buf);
 
