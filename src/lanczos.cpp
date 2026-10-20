@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <iostream>
 
 inline float sinc(float x) {
   // sinc(1) ~ -2*10^-8
