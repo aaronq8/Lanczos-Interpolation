@@ -18,6 +18,9 @@ target_compile_definitions(lanczos PUBLIC
     $<$<CONFIG:RelWithDebInfo>:DISABLE_DEBUG_LOGS>
 )
 
+# enable AVX2
+target_compile_options(lanczos PRIVATE -mavx2 -mfma)
+
 option(ENABLE_ASAN "Enable AddressSanitizer" ON)
 
 if(ENABLE_ASAN)

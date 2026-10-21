@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <emmintrin.h>
+#include <immintrin.h>
 
 #include "logger.h"
 
@@ -105,7 +107,6 @@ uint8_t *lanczos_resize(uint8_t *img, int x, int y, float *precalc_l_y,
   float *buf = (float *)std::malloc(res_y * x * sizeof(float));
   // horizontal pass
   // we go column major so that y_src is fixed
-  auto start_hz = std::chrono::steady_clock::now();
   for (int ry = 0; ry < res_y; ry++) {
     float y_src = ((ry + 0.5) * scale) - 0.5;
     // valid neighbours [rx][y_min....y_max]
@@ -126,25 +127,74 @@ uint8_t *lanczos_resize(uint8_t *img, int x, int y, float *precalc_l_y,
     }
   }
 
-  auto end_hz = std::chrono::steady_clock::now();
-
-  double elapsed_ms_hz =
-      std::chrono::duration<double, std::milli>(end_hz - start_hz).count();
-
-  LOG_INFO("horizontal pass : " << elapsed_ms_hz << " ms");
-
   auto start_vert = std::chrono::steady_clock::now();
 
   // vertical pass
   // row-wise so that res access is cache aligned => ~4% faster
   // buf access still needs to be improved
+  const __m256 zero = _mm256_setzero_ps();
+  const __m256i zeroi = _mm256_setzero_si256();
+  const __m256 mx_8 = _mm256_set1_ps(255.0f);
+
   for (int rx = 0; rx < res_x; rx++) {
     float x_src = ((rx + 0.5) * scale) - 0.5;
     // valid neighbours [x_min.....x_max][ry]
     int x_min = std::max(0, (int)ceil(x_src) - window_sz);
     int x_max = std::min((int)floor(x_src) + window_sz, x - 1);
+    int ry = 0;
+    // AVX-2
+    /* Main idea is since weights are fixed for each neighbour in same row
+     * w0*p0 w0*p1........w0*p7
+     * w1*p0 w1*p1........w1*p7
+     * w2*p0 w2*p1........w2*p7
+     * ....
+     * w6*p0 w6*p1........w6*p7
+     */
+    for (; ry + 7 <= res_y - 1; ry += 8) {
+      //[0.0,0.0,...0.0]
+      __m256 final_pix = _mm256_setzero_ps();
+      // load p0...p7 at x_min+v...since window_Sz=3 fixed
 
-    for (int ry = 0; ry < res_y; ry++) {
+#pragma unroll 7
+      for (int v = 0; v < x_max - x_min + 1; v++) {
+        // TODO check if adding 7*res_y padding and fixed loop size is faster
+        __m256 p = _mm256_loadu_ps(buf + ((x_min + v) * res_y) + ry);
+        // [wi,wi,....wi]
+        __m256 wi = _mm256_set1_ps(precalc_l_x[(rx * (2 * window_sz + 1)) + v]);
+        // add [wi*p0,wi*p1,wi*p2,...wi*p7] to final_pix
+        final_pix = _mm256_fmadd_ps(p, wi, final_pix);
+      }
+      // convert float -> uint8
+      __m256i final_pixi = _mm256_cvttps_epi32(final_pix);
+      // 32-bit -> 16-bit
+      // 0,1,2,3|4,5,6,7 => 0,1,2,3,0,0,0,0|4,5,6,7,0,0,0,0
+      final_pixi = _mm256_packus_epi32(final_pixi, zeroi);
+      // lower lane : 0,1,2,3,0,0.....0 (16 values,128-bit)
+      // upper lane : 4,5,6,7,0,0,....0 (16 values,128-bit)
+      // _us- usigned saturate will clamp [0-255]
+      final_pixi = _mm256_packus_epi16(final_pixi, zeroi);
+      __m128i low128 = _mm256_castsi256_si128(final_pixi);
+      __m128i up128 = _mm256_extracti128_si256(final_pixi, 1);
+      // [0,1,2,3] , [4,5,6,7]
+      uint32_t low32 = _mm_cvtsi128_si32(low128);
+      uint32_t up32 = _mm_cvtsi128_si32(up128);
+      // little endian so actually stored as (3,2,1,0)
+      // shift and extract 8 bits
+      int px = rx * res_y + ry;
+      res[px] = (uint8_t)(low32 & (0xFF));
+      res[px + 1] = (uint8_t)((low32 >> 8) & (0xFF));
+      res[px + 2] = (uint8_t)((low32 >> 16) & (0xFF));
+      res[px + 3] = (uint8_t)((low32 >> 24) & 0xFF);
+      // upper
+      //(7,6,5,4)
+      res[px + 4] = (uint8_t)((up32 & 0xFF));
+      res[px + 5] = (uint8_t)((up32 >> 8) & (0xFF));
+      res[px + 6] = (uint8_t)((up32 >> 16) & (0xFF));
+      res[px + 7] = (uint8_t)((up32 >> 24) & 0xFF);
+    }
+
+    // scalar loop - this will run at most 7 times
+    for (; ry < res_y; ry++) {
       int px = rx * res_y + ry;
       float final_pixel = 0.0;
       for (int i = x_min; i <= x_max; i++) {
