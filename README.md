@@ -340,7 +340,7 @@ The implementation names its **row** dimension `x` and **column** dimension `y`.
 Normalized sinc:
 
 $$
-\operatorname{sinc}(t) =
+\mathrm{sinc}(t) =
 \begin{cases}
 1, & t = 0 \\
 \frac{\sin(\pi t)}{\pi t}, & t \neq 0
@@ -352,7 +352,7 @@ Lanczos-3 kernel:
 $$
 L_3(t) =
 \begin{cases}
-\operatorname{sinc}(t)\operatorname{sinc}(t/3), & |t| < 3 \\
+\mathrm{sinc}(t)\mathrm{sinc}(t/3), & |t| < 3 \\
 0, & |t| \geq 3
 \end{cases}
 $$
@@ -409,7 +409,7 @@ Keep the horizontal intermediate as `float`, and only after vertical interpolati
 
 $$
 D_{\mathrm{8bit}} =
-\operatorname{clamp}(\operatorname{trunc}(D),0,255)
+\mathrm{clamp}(\mathrm{trunc}(D),0,255)
 $$
 
 This reflects the implementation's integer cast (truncation), rather than rounding to nearest.
