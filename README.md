@@ -324,100 +324,95 @@ Further optimization will focus on profiling instruction costs, memory access pa
 Map destination pixel centers back into source coordinates:
 
 $$
-
-c_s = (c_d + 0.5)*\frac*{W_s}{W_d} - 0.5
-
+c_s = (c_d + 0.5)\frac{W_s}{W_d} - 0.5
 $$
 
 $$
-
-r_s = (r_d + 0.5)*\frac*{H_s}{H_d} - 0.5
-
+r_s = (r_d + 0.5)\frac{H_s}{H_d} - 0.5
 $$
 
-Here `W` denotes width and `H` height; the implementation names its **row** dimension `x` and **column** dimension `y`.
+Here, $W$ denotes width and $H$ denotes height.
+
+The implementation names its **row** dimension `x` and **column** dimension `y`.
 
 ### 2. Lanczos-3 kernel
 
 Normalized sinc:
 
 $$
-
-*\mathrm*{sinc}(t) =
-
-*\begin*{cases}
-
-1, & t = 0 \\\\
-
-*\frac*{\sin(\pi t)}{\pi t}, & t \neq 0
-
-*\end*{cases}
-
+\operatorname{sinc}(t) =
+\begin{cases}
+1, & t = 0 \\
+\frac{\sin(\pi t)}{\pi t}, & t \neq 0
+\end{cases}
 $$
 
 Lanczos-3 kernel:
 
 $$
-
 L_3(t) =
-
-*\begin*{cases}
-
-*\mathrm*{sinc}(t)*\mathrm*{sinc}(t/3), & |t| < 3 \\\\
-
+\begin{cases}
+\operatorname{sinc}(t)\operatorname{sinc}(t/3), & |t| < 3 \\
 0, & |t| \geq 3
-
-*\end*{cases}
-
+\end{cases}
 $$
 
 ### 3. Direct 2D interpolation
 
-For source row `i` and column `j`, the combined weight is:
+For source row $i$ and column $j$, the combined weight is:
 
 $$
-
 w(i,j) = L_3(r_s-i)L_3(c_s-j)
-
 $$
 
-$$
-
-D(r_d,c_d) = *\frac*{*\sum\_*{i,j}S(i,j)w(i,j)}{*\sum\_*{i,j}w(i,j)}
+The interpolated destination pixel is:
 
 $$
+D(r_d,c_d) =
+\frac{\sum_{i,j} S(i,j)w(i,j)}
+{\sum_{i,j}w(i,j)}
+$$
 
-Only source pixels within the Lanczos support contribute; an interior output pixel considers approximately **6 × 6 = 36** candidates.
+Only source pixels within the Lanczos support contribute. An interior output pixel considers approximately **6 × 6 = 36** candidates.
 
 ### 4. Separable interpolation
 
 First, horizontal filtering:
 
 $$
-
-T(i,c_d) = *\frac*{\sum_j S(i,j)L_3(c_s-j)}{\sum_j L_3(c_s-j)}
-
+T(i,c_d) =
+\frac{\sum_j S(i,j)L_3(c_s-j)}
+{\sum_j L_3(c_s-j)}
 $$
 
 Then, vertical filtering:
 
 $$
-
-D(r_d,c_d) = *\frac*{\sum_i T(i,c_d)L_3(r_s-i)}{\sum_i L_3(r_s-i)}
-
+D(r_d,c_d) =
+\frac{\sum_i T(i,c_d)L_3(r_s-i)}
+{\sum_i L_3(r_s-i)}
 $$
 
 The normalization factors multiply because:
 
 $$
-
-*\sum\_*{i,j}w_x(i)w_y(j) = \left(\sum_i w_x(i)\right)\left(\sum_j w_y(j)\right)
-
+\sum_{i,j}w_x(i)w_y(j) =
+\left(\sum_i w_x(i)\right)
+\left(\sum_j w_y(j)\right)
 $$
 
 With consistent boundary handling and no intermediate 8-bit quantization, the two-pass calculation is mathematically equivalent to direct 2D filtering. Floating-point evaluation order can produce small numerical differences.
 
 ### 5. Output conversion
+
+Keep the horizontal intermediate as `float`, and only after vertical interpolation convert to 8 bits:
+
+$$
+D_{\mathrm{8bit}} =
+\operatorname{clamp}(\operatorname{trunc}(D),0,255)
+$$
+
+This reflects the implementation's integer cast (truncation), rather than rounding to nearest.
 
 Keep the horizontal intermediate as `float`, and only after vertical interpolation convert to 8 bits:
 
@@ -477,9 +472,7 @@ The application currently uses hard-coded image paths. Debug-level logging is di
 
 - [x] **AVX2 vertical pass**, processing eight adjacent output columns with shared coefficients and contiguous float loads
 
-- [ ] Optimize / vectorize the horizontal pass and benchmark against the frozen scalar version
-
-- [ ] Optional ARM NEON implementation
+- [x] Optimize / vectorize the horizontal pass and benchmark against the frozen scalar version
 
 - [ ] CUDA implementation and CPU–GPU comparisons
 
