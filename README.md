@@ -16,23 +16,19 @@ Goal: implement and optimize **Lanczos-3 image resampling**, starting with a str
 
 ## Current Status
 
-**Scalar CPU implementation complete; AVX2 vertical pass implemented and running. Horizontal SIMD is next.**
+**Scalar CPU implementation complete. AVX2 horizontal and vertical passes implemented and benchmarked.**
 
-- Loads JPEG images with `stb_image`, requesting three RGB8 channels; splits interleaved RGB into planar R, G, and B.
+- Implemented separable Lanczos-3 interpolation using a floating-point intermediate buffer.
+- Precomputed and normalized horizontal and vertical interpolation coefficients, shared across RGB channels.
+- Implemented AVX2 horizontal interpolation using 8-lane multiplication and horizontal reduction.
+- Implemented AVX2/FMA vertical interpolation, processing eight adjacent output pixels simultaneously.
+- Added zero-padded coefficient tables with eight entries per coordinate to support AVX2 loads.
+- Moved scratch-buffer and output-buffer allocations outside the resize hot path, allowing buffer reuse across RGB channels.
+- Precomputed source-neighbor bounds to reduce calculations during resizing.
+- Benchmarked fixed eight-iteration and variable-bound vertical loops.
+- Achieved a **4.991 ms median RGB resize time** on an Intel Core i9-13980HX using Google Benchmark.
 
-- Resizes each plane independently with separable Lanczos-3 (horizontal followed by vertical).
-
-- Uses pixel-center destination-to-source mapping, clamped source-neighbor bounds, and a floating-point intermediate buffer; final values are truncated and clamped to `[0, 255]`.
-
-- Builds **normalized coefficient tables once per image geometry**, with one set of weights for each destination column (horizontal) and each destination row (vertical). Shares those tables across all three color planes.
-
-- Uses **destination-column-major traversal for the horizontal pass** to maximize coefficient reuse; **destination-row-major traversal for the vertical pass** to write contiguous output pixels.
-
-- Uses Google Benchmark and Linux `perf` to evaluate the implementation. Benchmarking on the hybrid-core Intel CPU requires controlling core affinity and warm-up.
-
-- Visually checked the generated image against the previous implementation. A quantitative pixel-difference/PSNR comparison is intentionally deferred; visual similarity is not a formal numerical-equivalence test.
-
-**Implementation convention:** `x = rows (height)` and `y = columns (width)`; planar memory uses `img[row * width + col]`.
+**Current best:** AVX2 horizontal + AVX2/FMA vertical with variable-bound vertical interpolation.
 
 ## Reference Scalar Baseline — Intel Core i9-13980HX
 
@@ -107,56 +103,86 @@ All times below are median per RGB iteration unless otherwise noted. Input: **73
 
 A separate **single-plane** benchmark for **1920 × 1080 input → 3840 × 2160 output** previously reported a median of **35.564 ms**, CV **0.98%**. It is **not** an RGB benchmark and was collected under an earlier configuration; do not compare it directly with the latest three-plane results.
 
-### Latest AVX2 vertical-pass application run (single invocation)
+## AVX2 Performance — October 25, 2026
 
-The horizontal pass remains scalar; the vertical pass uses AVX2/FMA for eight adjacent output columns, with a scalar tail. These are **application timer logs**, not Google Benchmark statistics.
+### Benchmark Configuration
 
-| Parameter | Recorded value |
+| Parameter | Value |
 |---|---|
-| CPU | Intel Core i9-13980HX (Ubuntu) |
-| Input / output | 736 × 535 RGB8 → 1472 × 1070 RGB8 |
-| Build / command | `build/release/lanczos-main`, `taskset -c 8` |
-| Implementation | Precomputed coefficients; scalar horizontal pass + AVX2/FMA vertical pass |
-| **Total reported Lanczos kernel** | **10.6482 ms** |
+| CPU | Intel Core i9-13980HX |
+| OS | Ubuntu Linux |
+| Input | 736 × 535 RGB8 |
+| Output | 1472 × 1070 RGB8 |
+| Algorithm | Separable Lanczos-3 |
+| Horizontal pass | AVX2, 8-lane multiplication and horizontal reduction |
+| Vertical pass | AVX2/FMA, eight output pixels per iteration |
+| Threads | Single-threaded |
+| Benchmark | Google Benchmark |
+| Repetitions | 10 |
+| Build | `build/profile` |
+| Memory management | Preallocated scratch and output buffers |
 
-Vertical-pass timer output **in the order logged** (the application log does not label channels or warm-up):
+The latest implementation performs both interpolation passes using AVX2 intrinsics. Coefficient initialization and scratch-buffer allocation occur outside the resize hot path.
 
-| Logged vertical pass | Time |
-|---|---:|
-| 1 | 1.78825 ms |
-| 2 | 1.16033 ms |
-| 3 | 0.725781 ms |
-| 4 | 0.785632 ms |
+### AVX2 Benchmark Results
 
-There are four vertical-pass lines, consistent with a possible warm-up followed by three RGB planes, **but the log alone does not identify which invocation is which**. Do not sum all four and report it as the three-plane vertical time. The single total kernel measurement should not be treated as a controlled speedup against the earlier scalar Google Benchmark medians; run matched repeated benchmarks to establish a stable comparison. The reported total excludes image loading and PNG writing.
-
-## Historical Performance Measurements
-
-These are exploratory measurements made during development. They are retained as an optimization log, **not** presented as identical, controlled benchmark runs.
-
-| Platform | Implementation / change | Measured total RGB kernel time | Speedup vs original same-machine naive baseline |
-|---|---|---:|---:|
-| Intel Core i9-13980HX (Ubuntu) | Naive direct 2D Lanczos-3 | **1,896.13 ms** | 1.00× |
-| Intel Core i9-13980HX (Ubuntu) | Separable + coefficients reused within passes | **22.8961 ms** | ~82.8× |
-| Intel Core i9-13980HX (Ubuntu) | Shared, normalized tables; steady-state application after warm-up | **~15.3–15.6 ms** | ~121–124× (indicative only) |
-| Intel Core i9-13980HX (Ubuntu) | Scalar horizontal + AVX2 vertical (single pinned application run) | **10.6482 ms** | ~178× (indicative only; not a controlled speedup) |
-| Apple M1 Pro (macOS, Apple Clang) | Naive direct 2D Lanczos-3 | **~1,100 ms** | 1.00× |
-| Apple M1 Pro (macOS, Apple Clang) | Initial separable scalar | **~250 ms** | ~4.4× |
-| Apple M1 Pro (macOS, Apple Clang) | Vertical row-major traversal | **244.43 ms** | ~4.5× |
-| Apple M1 Pro (macOS, Apple Clang) | Precompute vertical weights per output row | **98.10 ms** | ~11.2× |
-
-The original Intel naive baseline, older Intel 22.8961 ms run, and M1 Pro figures were measured with application timers or single runs; the more recent Google Benchmark measurements use multiple repetitions. **Do not compare absolute performance across the Intel and Apple systems or quote the historical speedup as a controlled benchmark result.**
-
-Historical Intel 22.8961 ms pass breakdown:
-
-| Channel | Horizontal | Vertical |
+| Metric | Fixed 8-iteration vertical loop | Variable-bound vertical loop |
 |---|---:|---:|
-| R | 5.8977 ms | 5.4353 ms |
-| G | 2.2811 ms | 3.6287 ms |
-| B | 2.1836 ms | 3.2636 ms |
-| **Sum** | **10.3624 ms** | **12.3276 ms** |
+| Single-plane median | 1.7169 ms | **1.6619 ms** |
+| Single-plane mean | 1.7192 ms | 1.6738 ms |
+| Single-plane standard deviation | 0.0260 ms | 0.0272 ms |
+| Single-plane CV | 1.51% | 1.62% |
+| RGB median | 5.1879 ms | **4.9913 ms** |
+| RGB mean | 5.2025 ms | 5.0243 ms |
+| RGB standard deviation | 0.0483 ms | 0.0593 ms |
+| RGB CV | 0.93% | 1.18% |
 
-The first channel was notably slower, motivating investigation of cold-start effects.
+The variable-bound vertical loop improved the RGB median from 5.1879 ms to 4.9913 ms.
+
+**Observed improvement: approximately 3.79%.**
+
+The variable-bound implementation was retained as the current best-performing version.
+
+These measurements were collected in separate benchmark runs. Additional interleaved repetitions would help establish whether the improvement persists under controlled conditions.
+
+### Historical Performance Progression
+
+| Implementation | RGB execution time | Speedup vs initial 2D implementation |
+|---|---:|---:|
+| Naive direct 2D Lanczos-3 | 1896.13 ms | 1.0× |
+| Separable scalar implementation | 22.896 ms | 82.8× |
+| Optimized scalar with precomputed coefficients | 16.501 ms | 114.9× |
+| AVX2 vertical pass, scalar horizontal | 10.648 ms | 178.1× |
+| AVX2 horizontal + vertical, fixed vertical loop | 5.188 ms | 365.5× |
+| **AVX2 horizontal + vertical, variable-bound loop** | **4.991 ms** | **379.9×** |
+
+The historical measurements are not all directly comparable. They use different implementations, benchmarking scopes, and memory-allocation strategies.
+
+The approximately **3.31× improvement over the 16.501 ms optimized scalar baseline** is therefore indicative rather than an isolated measurement of SIMD speedup.
+
+### Application-Level Pass Timings
+
+A separate application run measured the individual horizontal and vertical passes.
+
+The first invocation was a warm-up and is excluded from the following table.
+
+| Channel | Horizontal pass | Vertical pass | Total |
+|---|---:|---:|---:|
+| R | 0.894 ms | 1.211 ms | 2.105 ms |
+| G | 0.916 ms | 1.126 ms | 2.042 ms |
+| B | 0.878 ms | 1.207 ms | 2.084 ms |
+| **RGB total** | **2.688 ms** | **3.544 ms** | **6.232 ms** |
+
+Reported application kernel time: **6.238 ms**.
+
+Approximate execution-time distribution:
+
+- Horizontal pass: 43.1%
+- Vertical pass: 56.9%
+
+Individual pass measurements showed variability and should not be interpreted as precise isolated kernel throughput.
+
+The application-level measurement and Google Benchmark use different execution conditions; their timings are reported separately.
 
 ## Optimization Log
 
@@ -234,6 +260,62 @@ The warm-up invocation still fluctuated substantially. **Likely factors** includ
 ### 6. First AVX2 vertical-pass result
 
 Implemented an AVX2/FMA vertical pass and recorded a pinned release application kernel time of **10.6482 ms**, with individual vertical-pass logs of **1.78825, 1.16033, 0.725781, and 0.785632 ms**. See the latest application run above for measurement caveats. Horizontal resampling has not yet been SIMD-optimized.
+
+### 7. AVX2 Horizontal Interpolation
+
+Implemented horizontal interpolation using AVX2 with one output pixel calculated per SIMD reduction.
+
+For each output pixel:
+
+- Load up to seven source pixels from contiguous image memory.
+- Convert unsigned 8-bit pixels into 32-bit floating-point values.
+- Load the corresponding precomputed interpolation coefficients.
+- Perform eight-lane floating-point multiplication.
+- Horizontally reduce the eight contributions into one output value.
+
+The coefficient table uses a stride of eight floats per output coordinate, with unused entries initialized to zero.
+
+This approach avoids full-image transposition and gather instructions.
+
+### 8. AVX2 Vertical Interpolation
+
+Implemented AVX2/FMA interpolation across eight adjacent output columns.
+
+Eight output pixels are accumulated simultaneously using shared interpolation coefficients and contiguous scratch-buffer loads.
+
+After accumulation, values are converted from floating point into packed unsigned 8-bit output pixels.
+
+Compared two vertical-loop strategies:
+
+- Fixed eight-iteration loop using zero-padded coefficients and scratch memory.
+- Variable-bound loop that processes only valid source neighbors.
+
+The variable-bound implementation achieved approximately **3.79% lower RGB median latency** in the recorded benchmark runs.
+
+### 9. Moving Memory Allocations Outside the Hot Path
+
+Refactored the resize interface to accept preallocated output buffers.
+
+Scratch-buffer allocation and coefficient initialization are performed once and reused across consecutive resize calls.
+
+The resize kernel no longer allocates or frees its primary working buffers during execution.
+
+This reduces allocation overhead and establishes a reusable workspace for future image and video processing experiments.
+
+The resulting benchmark measures the steady-state interpolation kernel, excluding initialization and working-buffer allocation.
+
+### 10. Current Best Performance
+
+**AVX2 Lanczos-3, Intel Core i9-13980HX**
+
+- Input: 736 × 535 RGB8
+- Output: 1472 × 1070 RGB8
+- Single-plane median: **1.662 ms**
+- Three-plane RGB median: **4.991 ms**
+- RGB benchmark CV: **1.18%**
+- Historical improvement over initial naive implementation: approximately **380×**
+
+Further optimization will focus on profiling instruction costs, memory access patterns, and alternative SIMD strategies.
 
 ## Resampling Mathematics
 
