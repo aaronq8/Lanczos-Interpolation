@@ -5,20 +5,25 @@
 
 // benchmarking for 1 plane
 static void BM_lanczosSinglePlane(benchmark::State &state) {
-  constexpr int x = 535, y = 736;
-  uint8_t *channel = (uint8_t *)std::malloc(x * y);
-  for (int i = 0; i < x * y; i++)
+  constexpr int x = 535, y = 736, sz = x * y + 2 * window_sz + 1;
+  const int res_x = x * scale_rec;
+  const int res_y = y * scale_rec;
+
+  uint8_t *channel = (uint8_t *)std::malloc(sz);
+  uint8_t *res_w = (uint8_t *)std::malloc(res_x * res_y);
+
+  for (int i = 0; i < sz; i++)
     channel[i] = (uint8_t)(i % 256);
   auto [precalc_l_y, precalc_l_x] = lanczos_init(x, y);
-  uint8_t *warmup = lanczos_resize(channel, x, y, precalc_l_y, precalc_l_x);
+
+  lanczos_resize(channel, x, y, precalc_l_y, precalc_l_x, &res_w);
 
   for (auto _ : state) {
-    uint8_t *channel_out =
-        lanczos_resize(channel, x, y, precalc_l_y, precalc_l_x);
-    benchmark::DoNotOptimize(channel_out);
-    std::free(channel_out);
+    lanczos_resize(channel, x, y, precalc_l_y, precalc_l_x, &res_w);
   }
-  std::free(warmup);
+
+  lanczos_free();
+  std::free(res_w);
   std::free(channel);
   std::free(precalc_l_y);
   std::free(precalc_l_x);
@@ -26,9 +31,13 @@ static void BM_lanczosSinglePlane(benchmark::State &state) {
 
 static void BM_lanczosRGB(benchmark::State &state) {
   constexpr int x = 535, y = 736;
+  const int res_x = x * scale_rec;
+  const int res_y = y * scale_rec;
+
   uint8_t *channel_r = (uint8_t *)std::malloc(x * y);
   uint8_t *channel_g = (uint8_t *)std::malloc(x * y);
   uint8_t *channel_b = (uint8_t *)std::malloc(x * y);
+  uint8_t *res_w = (uint8_t *)std::malloc(res_x * res_y);
 
   for (int i = 0; i < x * y; i++) {
     channel_r[i] = (uint8_t)(i % 256);
@@ -37,22 +46,16 @@ static void BM_lanczosRGB(benchmark::State &state) {
   }
 
   auto [precalc_l_y, precalc_l_x] = lanczos_init(x, y);
-  uint8_t *warmup = lanczos_resize(channel_r, x, y, precalc_l_y, precalc_l_x);
+  lanczos_resize(channel_r, x, y, precalc_l_y, precalc_l_x, &res_w);
 
   for (auto _ : state) {
-    uint8_t *r_out = lanczos_resize(channel_r, x, y, precalc_l_y, precalc_l_x);
-    uint8_t *g_out = lanczos_resize(channel_g, x, y, precalc_l_y, precalc_l_x);
-    uint8_t *b_out = lanczos_resize(channel_b, x, y, precalc_l_y, precalc_l_x);
-
-    benchmark::DoNotOptimize(r_out);
-    benchmark::DoNotOptimize(g_out);
-    benchmark::DoNotOptimize(b_out);
-
-    std::free(r_out);
-    std::free(g_out);
-    std::free(b_out);
+    lanczos_resize(channel_r, x, y, precalc_l_y, precalc_l_x, &res_w);
+    lanczos_resize(channel_g, x, y, precalc_l_y, precalc_l_x, &res_w);
+    lanczos_resize(channel_b, x, y, precalc_l_y, precalc_l_x, &res_w);
   }
-  std::free(warmup);
+
+  lanczos_free();
+  std::free(res_w);
   std::free(channel_r);
   std::free(channel_g);
   std::free(channel_b);

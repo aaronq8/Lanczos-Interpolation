@@ -24,9 +24,10 @@ int main(int argc, char **argv) {
   LOG_INFO("Loaded image....x : " << x << ", y : " << y
                                   << ", channels : " << org_c);
   // seperate planes
-  uint8_t *r_plane = (uint8_t *)std::malloc(x * y);
-  uint8_t *g_plane = (uint8_t *)std::malloc(x * y);
-  uint8_t *b_plane = (uint8_t *)std::malloc(x * y);
+  // add padding so that AVX horizontal pass stays within bounds
+  uint8_t *r_plane = (uint8_t *)std::malloc(x * y + 2 * window_sz + 1);
+  uint8_t *g_plane = (uint8_t *)std::malloc(x * y + 2 * window_sz + 1);
+  uint8_t *b_plane = (uint8_t *)std::malloc(x * y + 2 * window_sz + 1);
 
   for (int i = 0; i < x; i++) {
     for (int j = 0; j < y; j++) {
@@ -42,11 +43,20 @@ int main(int argc, char **argv) {
   // ~2-~3ms
   // why with warmup, our kernel much faster ?? 20ms -> 15ms ?
   // maybe we should try ARENA ?
-  uint8_t *warmup = lanczos_resize(r_plane, x, y, precalc_l_y, precalc_l_x);
+  const int res_x = x * scale_rec;
+  const int res_y = y * scale_rec;
+
+  uint8_t *res_w = (uint8_t *)std::malloc(res_x * res_y);
+  uint8_t *res_r = (uint8_t *)std::malloc(res_x * res_y);
+  uint8_t *res_g = (uint8_t *)std::malloc(res_x * res_y);
+  uint8_t *res_b = (uint8_t *)std::malloc(res_x * res_y);
+
+  // warmup call
+  lanczos_resize(r_plane, x, y, precalc_l_y, precalc_l_x, &res_w);
   auto start = std::chrono::steady_clock::now();
-  uint8_t *res_r = lanczos_resize(r_plane, x, y, precalc_l_y, precalc_l_x);
-  uint8_t *res_g = lanczos_resize(g_plane, x, y, precalc_l_y, precalc_l_x);
-  uint8_t *res_b = lanczos_resize(b_plane, x, y, precalc_l_y, precalc_l_x);
+  lanczos_resize(r_plane, x, y, precalc_l_y, precalc_l_x, &res_r);
+  lanczos_resize(g_plane, x, y, precalc_l_y, precalc_l_x, &res_g);
+  lanczos_resize(b_plane, x, y, precalc_l_y, precalc_l_x, &res_b);
   auto end = std::chrono::steady_clock::now();
 
   double elapsed_ms =
@@ -54,7 +64,6 @@ int main(int argc, char **argv) {
 
   LOG_INFO("Lanczos Kernel elapsed : " << elapsed_ms << " ms");
 
-  int res_x = x * scale_rec, res_y = y * scale_rec;
   stbi_uc *res = (stbi_uc *)std::malloc(res_x * res_y * c_num);
   for (int i = 0; i < res_x; i++) {
     for (int j = 0; j < res_y; j++) {
@@ -73,8 +82,9 @@ int main(int argc, char **argv) {
     LOG_INFO("FAILED to generate resized.png...");
   }
   // free everything
-  std::free(warmup);
+  lanczos_free();
   std::free(res);
+  std::free(res_w);
   std::free(res_r);
   std::free(res_g);
   std::free(res_b);
